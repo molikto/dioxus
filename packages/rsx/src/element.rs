@@ -226,9 +226,21 @@ impl Element {
     /// }
     /// ```
     fn merge_attributes(&mut self) {
+        Self::merge_attributes_helper(
+            &self.raw_attributes,
+            &mut self.merged_attributes,
+            &mut self.diagnostics,
+        );
+    }
+
+    pub(crate) fn merge_attributes_helper(
+        raw_attributes: &Vec<Attribute>,
+        merged_attributes: &mut Vec<Attribute>,
+        diagnostics: &mut Diagnostics,
+    ) {
         let mut attrs: Vec<&Attribute> = vec![];
 
-        for attr in &self.raw_attributes {
+        for attr in raw_attributes {
             if attrs.iter().any(|old_attr| old_attr.name == attr.name) {
                 continue;
             }
@@ -242,15 +254,14 @@ impl Element {
             }
 
             // Collect all the attributes with the same name
-            let matching_attrs = self
-                .raw_attributes
+            let matching_attrs = raw_attributes
                 .iter()
                 .filter(|a| a.name == attr.name)
                 .collect::<Vec<_>>();
 
             // if there's only one attribute with this name, then we don't need to merge anything
             if matching_attrs.len() == 1 {
-                self.merged_attributes.push(attr.clone());
+                merged_attributes.push(attr.clone());
                 continue;
             }
 
@@ -277,19 +288,16 @@ impl Element {
 
                 // Merge `if cond { "abc" } else if ...` into the output
                 if let AttributeValue::IfExpr(value) = &matching_attr.value {
-                    out.push_expr(value.quote_as_string(&mut self.diagnostics));
+                    out.push_expr(value.quote_as_string(diagnostics));
                     continue;
                 }
 
-                Self::add_merging_non_string_diagnostic(
-                    &mut self.diagnostics,
-                    matching_attr.span(),
-                );
+                Self::add_merging_non_string_diagnostic(diagnostics, matching_attr.span());
             }
 
             let out_lit = HotLiteral::Fmted(out.into());
 
-            self.merged_attributes.push(Attribute {
+            merged_attributes.push(Attribute {
                 name: attr.name.clone(),
                 value: AttributeValue::AttrLiteral(out_lit),
                 colon: attr.colon,

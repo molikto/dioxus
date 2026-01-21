@@ -32,6 +32,7 @@ pub struct Component {
     pub name: syn::Path,
     pub generics: Option<AngleBracketedGenericArguments>,
     pub fields: Vec<Attribute>,
+    pub merged_attributes: Vec<Attribute>,
     pub component_literal_dyn_idx: Vec<DynIdx>,
     pub spreads: Vec<Spread>,
     pub brace: Option<token::Brace>,
@@ -69,6 +70,7 @@ impl Parse for Component {
             name,
             generics,
             fields,
+            merged_attributes: Vec::new(),
             brace: Some(brace),
             component_literal_dyn_idx,
             spreads,
@@ -79,6 +81,7 @@ impl Parse for Component {
         // validating it will dump diagnostics into the output
         component.validate_component_path();
         component.validate_fields();
+        component.merge_attributes();
         component.validate_component_spread();
 
         Ok(component)
@@ -178,6 +181,7 @@ impl Component {
 
     /// Ensure there's no duplicate props - this will be a compile error but we can move it to a
     /// diagnostic, thankfully
+    /// Note: Multiple "class" attributes are allowed and will be merged
     fn validate_fields(&mut self) {
         let mut seen = HashSet::new();
 
@@ -185,9 +189,11 @@ impl Component {
             match &field.name {
                 AttributeName::Custom(_) => {}
                 AttributeName::BuiltIn(k) => {
+                    // Allow duplicate "class" attributes - they will be merged
+                    let is_class = k.to_string() == "class";
                     if !seen.contains(k) {
                         seen.insert(k);
-                    } else {
+                    } else if !is_class {
                         self.diagnostics.push(k.span().error(
                             "Duplicate prop field found. Only one prop field per name is allowed.",
                         ));
@@ -200,6 +206,16 @@ impl Component {
                 }
             }
         }
+    }
+
+    /// Merge multiple class attributes into a single attribute, similar to Element::merge_attributes
+    /// Only the "class" attribute supports merging - other duplicate attributes are rejected in validate_fields
+    fn merge_attributes(&mut self) {
+        Element::merge_attributes_helper(
+            &self.fields,
+            &mut self.merged_attributes,
+            &mut self.diagnostics,
+        );
     }
 
     /// Create the tokens we'll use for the props of the component
@@ -258,8 +274,9 @@ impl Component {
     }
 
     // Iterate over the props of the component (without spreads, key, and custom attributes)
+    // Uses merged_attributes to get the merged class attributes
     pub fn component_props(&self) -> impl Iterator<Item = &Attribute> {
-        self.fields
+        self.merged_attributes
             .iter()
             .filter(move |attr| !attr.name.is_likely_key())
     }
@@ -340,6 +357,7 @@ impl Component {
             generics,
             brace: None,
             fields: vec![],
+            merged_attributes: vec![],
             spreads: vec![],
             children: TemplateBody::new(vec![]),
             component_literal_dyn_idx: vec![],
@@ -530,5 +548,126 @@ mod tests {
             .map(|attr| attr.name.to_string())
             .collect::<Vec<_>>();
         assert_eq!(properties, ["to", "class"]);
+    }
+
+    /// Test multiple class attributes on components - basic case
+    #[test]
+    fn multiple_class_attributes_basic() {
+        let input = quote! {
+            MyComponent {
+                class: "foo",
+                class: "bar",
+            }
+        };
+
+        let component: Component = syn::parse2(input).unwrap();
+
+        // Should not have any errors
+        assert!(
+            component.diagnostics.is_empty(),
+            "Should allow multiple class attributes"
+        );
+
+        // Should have merged into one attribute
+        assert_eq!(component.merged_attributes.len(), 1);
+        assert_eq!(component.merged_attributes[0].name.to_string(), "class");
+
+        // The value should be merged with space delimiter
+        let tokens = component.to_token_stream();
+        let output = tokens.to_string();
+        assert!(
+            output.contains("foo") && output.contains("bar"),
+            "Should contain both class values"
+        );
+    }
+
+    /// Test multiple class attributes with conditional expressions (Tailwind use case)
+    #[test]
+    fn multiple_class_attributes_conditional() {
+        let input = quote! {
+            MyComponent {
+                class: if red { "bg-red-500" },
+                class: if blue_border { "border border-blue-500" },
+                class: "w-4 h-4 block",
+            }
+        };
+
+        let component: Component = syn::parse2(input).unwrap();
+
+        // Should not have any errors
+        assert!(
+            component.diagnostics.is_empty(),
+            "Should allow multiple class attributes with conditionals"
+        );
+
+        // Should have merged into one attribute
+        assert_eq!(component.merged_attributes.len(), 1);
+        assert_eq!(component.merged_attributes[0].name.to_string(), "class");
+    }
+
+    /// Test that other duplicate attributes are still rejected
+    #[test]
+    fn rejects_duplicate_non_class_attributes() {
+        let input = quote! {
+            MyComponent {
+                id: "first",
+                id: "second",
+            }
+        };
+
+        let component: Component = syn::parse2(input).unwrap();
+
+        // Should have errors for duplicate id
+        assert!(
+            !component.diagnostics.is_empty(),
+            "Should reject duplicate non-class attributes"
+        );
+    }
+
+    /// Test class attributes with spread
+    #[test]
+    fn multiple_class_attributes_with_spread() {
+        let input = quote! {
+            MyComponent {
+                class: "foo",
+                class: "bar",
+                ..props,
+            }
+        };
+
+        let component: Component = syn::parse2(input).unwrap();
+
+        // Should not have errors
+        assert!(
+            component.diagnostics.is_empty(),
+            "Should allow class merging with spread"
+        );
+
+        // Should have merged the class attributes
+        assert_eq!(component.merged_attributes.len(), 1);
+    }
+
+    /// Test class attributes with children
+    #[test]
+    fn multiple_class_attributes_with_children() {
+        let input = quote! {
+            MyComponent {
+                class: "parent",
+                class: if active { "active" },
+                div { "child content" }
+            }
+        };
+
+        let component: Component = syn::parse2(input).unwrap();
+
+        // Should not have errors
+        assert!(
+            component.diagnostics.is_empty(),
+            "Should allow class merging with children"
+        );
+
+        // Should have merged the class attributes
+        assert_eq!(component.merged_attributes.len(), 1);
+        assert!(!component.children.is_empty());
     }
 }
