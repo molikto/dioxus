@@ -161,14 +161,7 @@ impl App {
             button,
             button_state: _,
         } = event
-        {
-            if button == tray_icon::MouseButton::Left {
-                for webview in self.webviews.values() {
-                    webview.desktop_context.window.set_visible(true);
-                    webview.desktop_context.window.set_focus();
-                }
-            }
-        }
+        {}
     }
 
     #[cfg(all(feature = "devtools", debug_assertions))]
