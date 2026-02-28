@@ -186,6 +186,11 @@ impl DesktopService {
             .send_event(UserWindowEvent::CloseWindow(self.id()));
     }
 
+    /// shutdown the entire app, closing all windows
+    pub fn shutdown(&self) {
+        let _ = self.shared.proxy.send_event(UserWindowEvent::Shutdown);
+    }
+
     /// Close a particular window, given its ID
     pub fn close_window(&self, id: WindowId) {
         let _ = self
